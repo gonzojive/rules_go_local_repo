@@ -28,7 +28,7 @@ http_archive(
 ### Running from a local installation of the tool
 
 ```shell
-go install github.com/gonzojive/rules_go_local_repo
+go install github.com/gonzojive/rules_go_local_repo@latest
 ```
 
 ```shell
