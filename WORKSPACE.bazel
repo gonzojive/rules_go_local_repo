@@ -1,3 +1,5 @@
+workspace(name = "com_gonzojive_rules_go_local_repo")
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
@@ -26,9 +28,7 @@ go_rules_dependencies()
 
 go_register_toolchains(version = "1.18.2")
 
-
 gazelle_dependencies(go_repository_default_config = "//:WORKSPACE.bazel")
 
 # gazelle:repository_macro godeps.bzl%workspace_go_dependencies
 workspace_go_dependencies()
-

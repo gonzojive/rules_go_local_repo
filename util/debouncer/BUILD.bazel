@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "debouncer",
+    srcs = ["debouncer.go"],
+    importpath = "github.com/gonzojive/rules_go_local_repo/util/debouncer",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "debouncer_test",
+    srcs = ["debouncer_test.go"],
+    embed = [":debouncer"],
+)

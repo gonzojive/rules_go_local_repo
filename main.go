@@ -16,18 +16,33 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bazelbuild/buildtools/build"
 	"github.com/fsnotify/fsnotify"
 	"github.com/golang/glog"
+	"github.com/gonzojive/rules_go_local_repo/util/debouncer"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
 	inputDir      = flag.String("input", "", "Input directory.")
 	addr          = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
-	workspacePath = flag.String("workspce", "/home/red/tmp/EXAMPLE.bazel", "Workspace file")
+	workspacePath = flag.String("workspace", "", "Workspace file")
+	ruleName      = flag.String("rule_name", "", "Name of the http_archive rule in the workspace file that should be updated to point at the running server.")
 )
+
+// debounceDelay is the delay after an update to the directory until a new zip is generated.
+const debounceDelay = time.Millisecond * 500
+
+func formatURL(sha256 string) string {
+	return fmt.Sprintf("http://%s/local_repo_http_server/%s", *addr, sha256)
+}
+
+type zippedDir struct {
+	sha256   string
+	contents []byte
+}
 
 func main() {
 	flag.Parse()
@@ -37,38 +52,68 @@ func main() {
 }
 
 func run() error {
+	if *ruleName == "" {
+		return fmt.Errorf("must pass non-empty --rule_name flag")
+	}
+	if *workspacePath == "" {
+		return fmt.Errorf("must pass non-empty --workspace flag")
+	}
+	if *addr == "" {
+		return fmt.Errorf("must pass non-empty --http_addr flag")
+	}
 
 	eg, ctx := errgroup.WithContext(context.Background())
+
+	var zipContents *zippedDir
+
 	eg.Go(func() error {
-		wsBytes, err := ioutil.ReadFile(*workspacePath)
-		if err != nil {
-			return err
-		}
-		parsedFile, err := build.ParseWorkspace(*workspacePath, wsBytes)
-		if err != nil {
-			return err
-		}
-		glog.Infof("successfully parsed workspace: %v", parsedFile)
-		return nil
-	})
-	eg.Go(func() error {
-		return watchDirAndGenerateZips(ctx, ctx.Done(), *inputDir, func(zipFile []byte) {
-		})
-	})
-	eg.Go(func() error {
-		http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-			content, sha, err := doZip()
+		return watchDirAndGenerateZips(ctx, ctx.Done(), *inputDir, func(z *zippedDir, err error) error {
 			if err != nil {
+				glog.Errorf("error generating zip file: %v", err)
+				return nil
+			}
+			zipContents = z
+
+			wsBytes, err := ioutil.ReadFile(*workspacePath)
+			if err != nil {
+				return fmt.Errorf("failed to read workspace file at %q: %w", *workspacePath, err)
+			}
+			parsedFile, err := build.ParseWorkspace(*workspacePath, wsBytes)
+			if err != nil {
+				return err
+			}
+
+			if err := updateRelevantHTTPArchiveRules(parsedFile, z); err != nil {
+				return fmt.Errorf("error updating workspace file: %w", err)
+			}
+			if err := ioutil.WriteFile(*workspacePath, build.Format(parsedFile), 0664); err != nil {
+				return fmt.Errorf("error writing updated workspace file %q: %w", *workspacePath, err)
+			}
+			glog.Infof("successfully wrote new workspace with new hash %s", z.sha256)
+			return nil
+		}, func(ioErr error) error { return ioErr })
+	})
+	eg.Go(func() error {
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			wantSHA256 := r.URL.Query().Get("sha256")
+
+			if zipContents == nil {
 				w.Header().Set("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(fmt.Sprintf("error zipping dir: %v", err)))
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte("zip file for directory is not available"))
+				return
+			}
+			if wantSHA256 != "" && wantSHA256 != zipContents.sha256 {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusGone)
+				w.Write([]byte(fmt.Sprintf("zip hash is %q but wanted %q", zipContents.sha256, wantSHA256)))
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/zip")
-			w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="repo-%s.zip"`, sha))
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="repo-%s.zip"`, zipContents.sha256))
 			w.WriteHeader(http.StatusOK)
-			w.Write(content)
+			w.Write(zipContents.contents)
 
 		})
 		log.Println("Listening... at http://" + *addr)
@@ -78,20 +123,35 @@ func run() error {
 	return eg.Wait()
 }
 
-func doZip() (content []byte, sha string, err error) {
+func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
+	for _, rule := range f.Rules("http_archive") {
+		if rule.Name() != *ruleName {
+			continue
+		}
+		rule.SetAttr("sha256", &build.StringExpr{Value: z.sha256})
+		rule.SetAttr("urls", &build.ListExpr{
+			List: []build.Expr{
+				&build.StringExpr{Value: formatURL(z.sha256)},
+			},
+		})
+		glog.Infof("updated http_archive(name=%q, ...) at %s:%d", *ruleName, *workspacePath, rule.Call.Pos.Line)
+	}
+	return nil
+}
+
+func doZip() (*zippedDir, error) {
 	outZip := &bytes.Buffer{}
 	if err := zipDir(*inputDir, outZip); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	h := sha256.New()
 	h.Write([]byte("hello world\n"))
 	hFormatted := fmt.Sprintf("%x", h.Sum(nil))
 
-	glog.Infof("got zip of length %d; sha256=%q", len(outZip.Bytes()), hFormatted)
-	return outZip.Bytes(), hFormatted, nil
+	return &zippedDir{hFormatted, outZip.Bytes()}, nil
 }
 
-func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir string, fn func(zipFile []byte)) error {
+func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir string, fn func(zipFile *zippedDir, err error) error, transformIOErr func(error) error) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("error watching dir %q: %w", dir, err)
@@ -99,6 +159,17 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 	defer watcher.Close()
 
 	eg := &errgroup.Group{}
+
+	// Wait a bit after the last update within the directory before performing a
+	// a new zip operation.
+	debounce := debouncer.NewDebouncer(debounceDelay)
+	eg.Go(func() error {
+		return debounce.Listen(ctx, func() error {
+			return fn(doZip())
+		})
+	})
+	debounce.Trigger()
+
 	eg.Go(func() error {
 		for {
 			select {
@@ -114,8 +185,14 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					glog.Infof("modified file: %v", event.Name)
 				}
+				debounce.Trigger()
 			case err, ok := <-watcher.Errors:
+				glog.Infof("error: %v", err)
 				if !ok {
+					return err
+				}
+				err = transformIOErr(err)
+				if err != nil {
 					return err
 				}
 			}

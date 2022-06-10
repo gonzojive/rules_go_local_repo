@@ -1,3 +1,4 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@bazel_gazelle//:def.bzl", "gazelle")
 
 # gazelle:prefix github.com/gonzojive/rules_go_local_repo
@@ -11,4 +12,25 @@ gazelle(
         "-prune",
     ],
     command = "update-repos",
+)
+
+# gazelle:resolve go go github.com/bazelbuild/buildtools/build @com_github_bazelbuild_buildtools//build:go_default_library
+go_library(
+    name = "rules_go_local_repo_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/gonzojive/rules_go_local_repo",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//util/debouncer",
+        "@com_github_bazelbuild_buildtools//build:go_default_library",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_golang_glog//:glog",
+        "@org_golang_x_sync//errgroup",
+    ],
+)
+
+go_binary(
+    name = "rules_go_local_repo",
+    embed = [":rules_go_local_repo_lib"],
+    visibility = ["//visibility:public"],
 )
