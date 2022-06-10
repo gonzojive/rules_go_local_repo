@@ -6,6 +6,7 @@ go_library(
     importpath = "github.com/gonzojive/rules_go_local_repo/cmd/local_repo_http_server",
     visibility = ["//visibility:private"],
     deps = [
+        "@com_github_bazelbuild_buildtools//build:go_default_library",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_golang_glog//:glog",
         "@org_golang_x_sync//errgroup",

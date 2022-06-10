@@ -11,19 +11,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 
+	"github.com/bazelbuild/buildtools/build"
 	"github.com/fsnotify/fsnotify"
 	"github.com/golang/glog"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	inputDir = flag.String("input", "", "Input directory.")
-	addr     = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
+	inputDir      = flag.String("input", "", "Input directory.")
+	addr          = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
+	workspacePath = flag.String("workspce", "/home/red/tmp/EXAMPLE.bazel", "Workspace file")
 )
 
 func main() {
@@ -36,6 +39,18 @@ func main() {
 func run() error {
 
 	eg, ctx := errgroup.WithContext(context.Background())
+	eg.Go(func() error {
+		wsBytes, err := ioutil.ReadFile(*workspacePath)
+		if err != nil {
+			return err
+		}
+		parsedFile, err := build.ParseWorkspace(*workspacePath, wsBytes)
+		if err != nil {
+			return err
+		}
+		glog.Infof("successfully parsed workspace: %v", parsedFile)
+		return nil
+	})
 	eg.Go(func() error {
 		return watchDirAndGenerateZips(ctx, ctx.Done(), *inputDir, func(zipFile []byte) {
 		})
