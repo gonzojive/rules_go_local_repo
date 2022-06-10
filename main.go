@@ -158,7 +158,7 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 	}
 	defer watcher.Close()
 
-	eg := &errgroup.Group{}
+	eg, ctx := errgroup.WithContext(ctx)
 
 	// Wait a bit after the last update within the directory before performing a
 	// a new zip operation.
@@ -177,20 +177,10 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 				return ctx.Err()
 			case <-done:
 				return nil
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return nil
-				}
-				glog.Infof("event: %v", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					glog.Infof("modified file: %v", event.Name)
-				}
+			case <-watcher.Events:
 				debounce.Trigger()
-			case err, ok := <-watcher.Errors:
-				glog.Infof("error: %v", err)
-				if !ok {
-					return err
-				}
+			case err := <-watcher.Errors:
+				glog.Errorf("file watcher error: %v", err)
 				err = transformIOErr(err)
 				if err != nil {
 					return err
@@ -210,9 +200,6 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 		if (info.Mode() & os.ModeSymlink) != 0 {
 			return nil
 		}
-		if info.IsDir() {
-			return nil
-		}
 		watchedSet[path] = true
 		return nil
 	}); err != nil {
@@ -220,7 +207,7 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 	}
 
 	for d := range watchedSet {
-		if err = watcher.Add(dir); err != nil {
+		if err = watcher.Add(d); err != nil {
 			return fmt.Errorf("error adding %q to watch set", d)
 		}
 	}

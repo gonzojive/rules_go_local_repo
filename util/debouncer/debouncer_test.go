@@ -13,7 +13,7 @@ func TestDebouncer_Wait1(t *testing.T) {
 		time.Sleep(time.Millisecond * 20)
 		d.Trigger()
 	}
-	time.Sleep(time.Millisecond * 700)
+	time.Sleep(time.Millisecond * 706)
 	d.Trigger()
 
 	count := 0
