@@ -36,7 +36,7 @@ var (
 const debounceDelay = time.Millisecond * 500
 
 func formatURL(sha256 string) string {
-	return fmt.Sprintf("http://%s/local_repo_http_server/%s", *addr, sha256)
+	return fmt.Sprintf("http://%s/?sha256=%s", *addr, sha256)
 }
 
 type zippedDir struct {
