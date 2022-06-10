@@ -32,7 +32,7 @@ go install github.com/gonzojive/rules_go_local_repo@latest
 ```
 
 ```shell
-rules_go_local_repo -- --alsologtostderr --input "/home/person/git/my_copy_of_dep" --rule_name "com_example_some_repo" --workspace "/home/person/git/my_repo/WORKSPACE"
+rules_go_local_repo --alsologtostderr --input "/home/person/git/my_copy_of_dep" --rule_name "com_example_some_repo" --workspace "/home/person/git/my_repo/WORKSPACE"
 ```
 
 The WORKSPACE.bazel file will be continuously updated to something like the
