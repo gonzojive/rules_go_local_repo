@@ -41,7 +41,7 @@ following:
 go_repository(
     name = "com_example_some_repo",
     sha256 = "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
-    urls = ["http://localhost:8673/?sha256=a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447"],
+    urls = ["http://localhost:8673/by-sha256/a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447.zip"],
     type = "zip",
 )
 ```
