@@ -9,4 +9,7 @@ require (
 	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
 )
 
-require golang.org/x/sys v0.0.0-20220412211240-33da011f77ad // indirect
+require (
+	github.com/julienschmidt/httprouter v1.3.0
+	golang.org/x/sys v0.0.0-20220412211240-33da011f77ad // indirect
+)

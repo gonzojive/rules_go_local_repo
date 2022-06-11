@@ -94,6 +94,13 @@ def workspace_go_dependencies():
         version = "v0.5.1",
     )
     go_repository(
+        name = "com_github_julienschmidt_httprouter",
+        importpath = "github.com/julienschmidt/httprouter",
+        sum = "h1:U0609e9tgbseu3rBINet9P48AI/D3oJs4dN7jwJOQ1U=",
+        version = "v1.3.0",
+    )
+
+    go_repository(
         name = "com_github_prometheus_client_model",
         importpath = "github.com/prometheus/client_model",
         sum = "h1:gQz4mCbXsO+nc9n1hCxHcGA3Zx3Eo+UHZoInFGUIXNM=",

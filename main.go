@@ -16,12 +16,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bazelbuild/buildtools/build"
 	"github.com/fsnotify/fsnotify"
 	"github.com/golang/glog"
 	"github.com/gonzojive/rules_go_local_repo/util/debouncer"
+	"github.com/julienschmidt/httprouter"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,14 +31,14 @@ var (
 	inputDir      = flag.String("input", "", "Input directory.")
 	addr          = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
 	workspacePath = flag.String("workspace", "", "Workspace file")
-	ruleName      = flag.String("rule_name", "", "Name of the http_archive rule in the workspace file that should be updated to point at the running server.")
+	ruleName      = flag.String("rule_name", "", "Name of the go_repository rule in the workspace file that should be updated to point at the running server.")
 )
 
 // debounceDelay is the delay after an update to the directory until a new zip is generated.
 const debounceDelay = time.Millisecond * 500
 
 func formatURL(sha256 string) string {
-	return fmt.Sprintf("http://%s/?sha256=%s", *addr, sha256)
+	return fmt.Sprintf("http://%s/by-sha256/%s.zip", *addr, sha256)
 }
 
 type zippedDir struct {
@@ -73,6 +75,7 @@ func run() error {
 				return nil
 			}
 			zipContents = z
+			glog.Infof("new zip file prepared with sha256 = %q", zipContents.sha256)
 
 			wsBytes, err := ioutil.ReadFile(*workspacePath)
 			if err != nil {
@@ -94,8 +97,17 @@ func run() error {
 		}, func(ioErr error) error { return ioErr })
 	})
 	eg.Go(func() error {
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			wantSHA256 := r.URL.Query().Get("sha256")
+		router := httprouter.New()
+		router.GET("/", func(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+			if zipContents == nil {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte("please request /by-sha256/"))
+				return
+			}
+		})
+		router.GET("/by-sha256/:expectedhash", func(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+			wantSHA256 := strings.TrimSuffix(params.ByName("expectedhash"), ".zip")
 
 			if zipContents == nil {
 				w.Header().Set("Content-Type", "text/plain")
@@ -105,7 +117,7 @@ func run() error {
 			}
 			if wantSHA256 != "" && wantSHA256 != zipContents.sha256 {
 				w.Header().Set("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusGone)
+				w.WriteHeader(http.StatusNotFound)
 				w.Write([]byte(fmt.Sprintf("zip hash is %q but wanted %q", zipContents.sha256, wantSHA256)))
 				return
 			}
@@ -117,24 +129,26 @@ func run() error {
 
 		})
 		log.Println("Listening... at http://" + *addr)
-		return http.ListenAndServe(*addr, nil)
+		return http.ListenAndServe(*addr, router)
 
 	})
 	return eg.Wait()
 }
 
 func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
-	for _, rule := range f.Rules("http_archive") {
+	for _, rule := range f.Rules("go_repository") {
 		if rule.Name() != *ruleName {
 			continue
 		}
+		// see https://github.com/bazelbuild/bazel-gazelle/blob/master/repository.md#go_repository
 		rule.SetAttr("sha256", &build.StringExpr{Value: z.sha256})
+		rule.SetAttr("type", &build.StringExpr{Value: "zip"})
 		rule.SetAttr("urls", &build.ListExpr{
 			List: []build.Expr{
 				&build.StringExpr{Value: formatURL(z.sha256)},
 			},
 		})
-		glog.Infof("updated http_archive(name=%q, ...) at %s:%d", *ruleName, *workspacePath, rule.Call.Pos.Line)
+		glog.Infof("updated go_repository(name=%q, ...) at %s:%d", *ruleName, *workspacePath, rule.Call.Pos.Line)
 	}
 	return nil
 }
@@ -144,11 +158,12 @@ func doZip() (*zippedDir, error) {
 	if err := zipDir(*inputDir, outZip); err != nil {
 		return nil, err
 	}
+	zipBytes := outZip.Bytes()
 	h := sha256.New()
-	h.Write([]byte("hello world\n"))
+	h.Write(zipBytes)
 	hFormatted := fmt.Sprintf("%x", h.Sum(nil))
 
-	return &zippedDir{hFormatted, outZip.Bytes()}, nil
+	return &zippedDir{hFormatted, zipBytes}, nil
 }
 
 func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir string, fn func(zipFile *zippedDir, err error) error, transformIOErr func(error) error) error {
