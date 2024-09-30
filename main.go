@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -77,7 +76,7 @@ func run() error {
 			zipContents = z
 			glog.Infof("new zip file prepared with sha256 = %q", zipContents.sha256)
 
-			wsBytes, err := ioutil.ReadFile(*workspacePath)
+			wsBytes, err := os.ReadFile(*workspacePath)
 			if err != nil {
 				return fmt.Errorf("failed to read workspace file at %q: %w", *workspacePath, err)
 			}
@@ -89,7 +88,7 @@ func run() error {
 			if err := updateRelevantHTTPArchiveRules(parsedFile, z); err != nil {
 				return fmt.Errorf("error updating workspace file: %w", err)
 			}
-			if err := ioutil.WriteFile(*workspacePath, build.Format(parsedFile), 0664); err != nil {
+			if err := os.WriteFile(*workspacePath, build.Format(parsedFile), 0664); err != nil {
 				return fmt.Errorf("error writing updated workspace file %q: %w", *workspacePath, err)
 			}
 			glog.Infof("successfully wrote new workspace with new hash %s", z.sha256)
