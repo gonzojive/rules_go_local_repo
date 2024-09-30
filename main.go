@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,14 +24,15 @@ import (
 	"github.com/golang/glog"
 	"github.com/gonzojive/rules_go_local_repo/util/debouncer"
 	"github.com/julienschmidt/httprouter"
+	gitignore "github.com/sabhiram/go-gitignore"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	inputDir      = flag.String("input", "", "Input directory.")
-	addr          = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
-	workspacePath = flag.String("workspace", "", "Workspace file")
-	ruleName      = flag.String("rule_name", "", "Name of the go_repository rule in the workspace file that should be updated to point at the running server.")
+	inputDir   = flag.String("input_dir", "", "Input directory.")
+	addr       = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
+	modulePath = flag.String("module_file", "", "Path of a MODULE.bazel file.")
+	ruleName   = flag.String("rule_name", "", "Name of the go_repository rule in the workspace file that should be updated to point at the running server.")
 )
 
 // debounceDelay is the delay after an update to the directory until a new zip is generated.
@@ -53,11 +55,8 @@ func main() {
 }
 
 func run() error {
-	if *ruleName == "" {
-		return fmt.Errorf("must pass non-empty --rule_name flag")
-	}
-	if *workspacePath == "" {
-		return fmt.Errorf("must pass non-empty --workspace flag")
+	if *modulePath == "" {
+		return fmt.Errorf("must pass non-empty --module_file flag")
 	}
 	if *addr == "" {
 		return fmt.Errorf("must pass non-empty --http_addr flag")
@@ -76,11 +75,11 @@ func run() error {
 			zipContents = z
 			glog.Infof("new zip file prepared with sha256 = %q", zipContents.sha256)
 
-			wsBytes, err := os.ReadFile(*workspacePath)
+			moduleBytes, err := os.ReadFile(*modulePath)
 			if err != nil {
-				return fmt.Errorf("failed to read workspace file at %q: %w", *workspacePath, err)
+				return fmt.Errorf("failed to read MODULE.bazel file at %q: %w", *modulePath, err)
 			}
-			parsedFile, err := build.ParseWorkspace(*workspacePath, wsBytes)
+			parsedFile, err := build.ParseModule(*modulePath, moduleBytes)
 			if err != nil {
 				return err
 			}
@@ -88,8 +87,8 @@ func run() error {
 			if err := updateRelevantHTTPArchiveRules(parsedFile, z); err != nil {
 				return fmt.Errorf("error updating workspace file: %w", err)
 			}
-			if err := os.WriteFile(*workspacePath, build.Format(parsedFile), 0664); err != nil {
-				return fmt.Errorf("error writing updated workspace file %q: %w", *workspacePath, err)
+			if err := os.WriteFile(*modulePath, build.Format(parsedFile), 0664); err != nil {
+				return fmt.Errorf("error writing updated workspace file %q: %w", *modulePath, err)
 			}
 			glog.Infof("successfully wrote new workspace with new hash %s", z.sha256)
 			return nil
@@ -98,11 +97,16 @@ func run() error {
 	eg.Go(func() error {
 		router := httprouter.New()
 		router.GET("/", func(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(fmt.Sprintf("please zip archives using /by-sha256/\n\n")))
 			if zipContents == nil {
-				w.Header().Set("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusNotFound)
-				w.Write([]byte("please request /by-sha256/"))
-				return
+				w.Write([]byte(fmt.Sprintf("zip archive of %q not currently available", *inputDir)))
+			} else {
+				url := fmt.Sprintf("http://%s/by-sha256/%s", *addr, zipContents.sha256)
+				w.Write([]byte(fmt.Sprintf(`zip archive of %q is available with sha256 %s:
+
+%s`, *inputDir, zipContents.sha256, url)))
 			}
 		})
 		router.GET("/by-sha256/:expectedhash", func(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
@@ -147,7 +151,7 @@ func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
 				&build.StringExpr{Value: formatURL(z.sha256)},
 			},
 		})
-		glog.Infof("updated go_repository(name=%q, ...) at %s:%d", *ruleName, *workspacePath, rule.Call.Pos.Line)
+		glog.Infof("updated go_repository(name=%q, ...) at %s:%d", *ruleName, *modulePath, rule.Call.Pos.Line)
 	}
 	return nil
 }
@@ -232,10 +236,24 @@ func zipDir(dir string, writer io.Writer) error {
 	w := zip.NewWriter(writer)
 	defer w.Close()
 
+	ignoreFileBytes, err := os.ReadFile(path.Join(dir, ".gitignore"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("unexpected error opening .gitignore file: %w", err)
+		}
+	}
+	ignore := gitignore.CompileIgnoreLines(strings.Split(string(ignoreFileBytes), "\n")...)
+
 	if err := walkDir(dir, func(path string, info os.FileInfo) error {
+
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
 			return fmt.Errorf("error coming up with relative path for file %q", relPath)
+		}
+
+		if ignore.MatchesPath(relPath) {
+			glog.Infof("ignoring .gitignored path %s", relPath)
+			return nil
 		}
 
 		file, err := os.Open(path)
