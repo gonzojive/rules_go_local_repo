@@ -66,6 +66,10 @@ func run() error {
 		return fmt.Errorf("must pass non-empty --import_path flag")
 	}
 
+	if err := ensureModuleMatches(); err != nil {
+		return err
+	}
+
 	eg, ctx := errgroup.WithContext(context.Background())
 
 	var zipContents *zippedDir
@@ -142,10 +146,35 @@ func run() error {
 	return eg.Wait()
 }
 
-func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
-	updated, err := moduleupdater.UpdateModuleFile(f, moduleupdater.MatchSpec{
+func ensureModuleMatches() error {
+	moduleBytes, err := os.ReadFile(*modulePath)
+	if err != nil {
+		return fmt.Errorf("failed to read MODULE.bazel file at %q: %w", *modulePath, err)
+	}
+	parsedFile, err := build.ParseModule(*modulePath, moduleBytes)
+	if err != nil {
+		return err
+	}
+	if (&moduleupdater.MatchSpec{
 		GoImportPath: *importPath,
-	}, z.sha256, formatURL(z.sha256))
+	}).Matches(parsedFile) {
+		return nil
+	}
+	return fmt.Errorf(`%s doesn't contain a section like
+
+go_deps.archive_override(
+    path = %q,
+    sha256 = "...",
+    urls = ["..."],
+)
+	
+Add such a section to your MODULE.bazel file.`, *modulePath, *importPath)
+}
+
+func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
+	updated, err := (&moduleupdater.MatchSpec{
+		GoImportPath: *importPath,
+	}).UpdateFile(f, z.sha256, formatURL(z.sha256))
 
 	if err != nil {
 		return err

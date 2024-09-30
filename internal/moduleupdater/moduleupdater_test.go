@@ -125,7 +125,7 @@ go_deps.archive_override(
 				t.Fatalf("Failed to parse input: %v", err)
 			}
 
-			updated, err := UpdateModuleFile(f, tt.matchSpec, tt.sha256, tt.url)
+			updated, err := tt.matchSpec.UpdateFile(f, tt.sha256, tt.url)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("UpdateModuleFile() error = %v, wantErr %v", err, tt.wantErr)
 				return

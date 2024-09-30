@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "moduleupdater",
+    srcs = ["moduleupdater.go"],
+    importpath = "github.com/gonzojive/rules_go_local_repo/internal/moduleupdater",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@com_github_bazelbuild_buildtools//build:go_default_library",
+        "@com_github_golang_glog//:glog",
+    ],
+)
+
+go_test(
+    name = "moduleupdater_test",
+    srcs = ["moduleupdater_test.go"],
+    embed = [":moduleupdater"],
+    deps = [
+        "@com_github_bazelbuild_buildtools//build:go_default_library",
+        "@com_github_google_go_cmp//cmp",
+    ],
+)
