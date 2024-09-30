@@ -6,6 +6,7 @@ require (
 	github.com/bazelbuild/buildtools v0.0.0-20240918101019-be1c24cc9a44
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/golang/glog v1.2.2
+	github.com/google/go-cmp v0.6.0
 	golang.org/x/sync v0.8.0
 )
 
