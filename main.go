@@ -22,6 +22,7 @@ import (
 	"github.com/bazelbuild/buildtools/build"
 	"github.com/fsnotify/fsnotify"
 	"github.com/golang/glog"
+	"github.com/gonzojive/rules_go_local_repo/internal/moduleupdater"
 	"github.com/gonzojive/rules_go_local_repo/util/debouncer"
 	"github.com/julienschmidt/httprouter"
 	gitignore "github.com/sabhiram/go-gitignore"
@@ -32,7 +33,7 @@ var (
 	inputDir   = flag.String("input_dir", "", "Input directory.")
 	addr       = flag.String("http_addr", "localhost:8673", "Serving address to use for HTTP server.")
 	modulePath = flag.String("module_file", "", "Path of a MODULE.bazel file.")
-	ruleName   = flag.String("rule_name", "", "Name of the go_repository rule in the workspace file that should be updated to point at the running server.")
+	importPath = flag.String("import_path", "", "Go import path of the go_deps.archive_override to be updated.")
 )
 
 // debounceDelay is the delay after an update to the directory until a new zip is generated.
@@ -60,6 +61,9 @@ func run() error {
 	}
 	if *addr == "" {
 		return fmt.Errorf("must pass non-empty --http_addr flag")
+	}
+	if *importPath == "" {
+		return fmt.Errorf("must pass non-empty --import_path flag")
 	}
 
 	eg, ctx := errgroup.WithContext(context.Background())
@@ -90,7 +94,7 @@ func run() error {
 			if err := os.WriteFile(*modulePath, build.Format(parsedFile), 0664); err != nil {
 				return fmt.Errorf("error writing updated workspace file %q: %w", *modulePath, err)
 			}
-			glog.Infof("successfully wrote new workspace with new hash %s", z.sha256)
+			glog.Infof("successfully wrote new MODULE.bazel with new hash %s", z.sha256)
 			return nil
 		}, func(ioErr error) error { return ioErr })
 	})
@@ -139,19 +143,32 @@ func run() error {
 }
 
 func updateRelevantHTTPArchiveRules(f *build.File, z *zippedDir) error {
-	for _, rule := range f.Rules("go_repository") {
-		if rule.Name() != *ruleName {
+	updated, err := moduleupdater.UpdateModuleFile(f, moduleupdater.MatchSpec{
+		GoImportPath: *importPath,
+	}, z.sha256, formatURL(z.sha256))
+
+	if err != nil {
+		return err
+	}
+
+	if !updated {
+		glog.Warningf("failed to update MODULE.bazel file, could not find existing go_dep with archive_override")
+		return nil
+	}
+	return nil
+}
+
+func attrDefn(call *build.CallExpr, key string) *build.AssignExpr {
+	for _, kv := range call.List {
+		as, ok := kv.(*build.AssignExpr)
+		if !ok {
 			continue
 		}
-		// see https://github.com/bazelbuild/bazel-gazelle/blob/master/repository.md#go_repository
-		rule.SetAttr("sha256", &build.StringExpr{Value: z.sha256})
-		rule.SetAttr("type", &build.StringExpr{Value: "zip"})
-		rule.SetAttr("urls", &build.ListExpr{
-			List: []build.Expr{
-				&build.StringExpr{Value: formatURL(z.sha256)},
-			},
-		})
-		glog.Infof("updated go_repository(name=%q, ...) at %s:%d", *ruleName, *modulePath, rule.Call.Pos.Line)
+		k, ok := as.LHS.(*build.Ident)
+		if !ok || k.Name != key {
+			continue
+		}
+		return as
 	}
 	return nil
 }
@@ -232,6 +249,10 @@ func watchDirAndGenerateZips(ctx context.Context, done <-chan struct{}, dir stri
 	return eg.Wait()
 }
 
+var builtinGitIgnoreLines = []string{
+	".git",
+}
+
 func zipDir(dir string, writer io.Writer) error {
 	w := zip.NewWriter(writer)
 	defer w.Close()
@@ -242,7 +263,9 @@ func zipDir(dir string, writer io.Writer) error {
 			return fmt.Errorf("unexpected error opening .gitignore file: %w", err)
 		}
 	}
-	ignore := gitignore.CompileIgnoreLines(strings.Split(string(ignoreFileBytes), "\n")...)
+	lines := strings.Split(string(ignoreFileBytes), "\n")
+	lines = append(lines, builtinGitIgnoreLines...)
+	ignore := gitignore.CompileIgnoreLines(lines...)
 
 	if err := walkDir(dir, func(path string, info os.FileInfo) error {
 
